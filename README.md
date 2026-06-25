@@ -13,6 +13,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/Nandansai08/whetstone/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Nandansai08/whetstone/ci.yml?branch=main&style=flat-square&label=CI" alt="CI"></a>
   <a href="https://github.com/Nandansai08/whetstone/releases"><img src="https://img.shields.io/github/v/release/Nandansai08/whetstone?style=flat-square" alt="Release"></a>
   <a href="https://github.com/Nandansai08/whetstone/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Nandansai08/whetstone?style=flat-square" alt="License"></a>
   <a href="https://www.python.org/"><img src="https://img.shields.io/badge/python-3.11+-blue?style=flat-square" alt="Python"></a>
