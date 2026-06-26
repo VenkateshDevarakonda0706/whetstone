@@ -94,3 +94,39 @@ def test_worker_and_judge_use_different_models(mock_ask, mock_run):
     verify(SUBTASK, "code")
     assert len(models_used) == 2
     assert models_used[0] != models_used[1]
+
+
+@patch("builder_agent.verify.run_code")
+@patch("builder_agent.verify.ask")
+def test_verify_package_runs_correctly(mock_ask, mock_run):
+    called_run_code = []
+
+    def mock_run_code(full_code, timeout=10):
+        called_run_code.append(full_code)
+        return True, "ok"
+
+    mock_run.side_effect = mock_run_code
+    mock_ask.side_effect = [
+        "assert add(1, 2) == 3",  # make_tests
+        json.dumps({"score": 10, "issues": []}),  # judge
+    ]
+
+    from builder_agent.verify import verify
+    package_files = {
+        "pkg/__init__.py": "from .core import add\n",
+        "pkg/core.py": "def add(a, b): return a + b\n"
+    }
+
+    v = verify(SUBTASK, package_files)
+    assert v.passed is True
+    assert v.tests_passed is True
+    assert v.score == 10
+
+    # Assert that the full_code contains the file dict serialization
+    assert len(called_run_code) == 1
+    script = called_run_code[0]
+    assert "pkg/__init__.py" in script
+    assert "pkg/core.py" in script
+    assert "import pytest" in script
+    assert "pytest.main" in script
+

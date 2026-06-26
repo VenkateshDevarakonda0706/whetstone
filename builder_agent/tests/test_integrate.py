@@ -68,3 +68,92 @@ def test_integrate_syntax_check():
     result = integrate(SPEC, outputs, PLAN)
     tree = ast.parse(result)
     assert tree is not None
+
+
+def test_integrate_package(monkeypatch):
+    package_spec = Spec(
+        request="calculator",
+        description="A CLI calculator",
+        acceptance_criteria=["adds", "subtracts"],
+        assumptions=[],
+        output_type="python_package",
+    )
+    outputs = {
+        "t1": "def add(a, b):\n    return a + b",
+        "t2": "def subtract(a, b):\n    return a - b",
+    }
+
+    import json
+
+    from builder_agent import integrate as integrate_mod
+
+    mocked_json = {
+        "calculator/__init__.py": "from .core import add, subtract\n",
+        "calculator/core.py": (
+            "def add(a, b): return a + b\n"
+            "def subtract(a, b): return a - b\n"
+        )
+    }
+
+    monkeypatch.setattr(
+        integrate_mod,
+        "ask",
+        lambda *args, **kwargs: json.dumps(mocked_json),
+    )
+
+    result = integrate(package_spec, outputs, PLAN)
+    assert isinstance(result, dict)
+    assert "calculator/__init__.py" in result
+    assert "calculator/core.py" in result
+    assert "from .core import" in result["calculator/__init__.py"]
+
+
+def test_integrate_package_unsafe_absolute_path(monkeypatch):
+    package_spec = Spec(
+        request="calculator",
+        description="A CLI calculator",
+        acceptance_criteria=["adds", "subtracts"],
+        assumptions=[],
+        output_type="python_package",
+    )
+    import json
+
+    import pytest
+
+    from builder_agent import integrate as integrate_mod
+
+    monkeypatch.setattr(
+        integrate_mod,
+        "ask",
+        lambda *args, **kwargs: json.dumps({"/abs/path.py": "content"})
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        integrate(package_spec, {}, PLAN)
+    assert "Unsafe path" in str(exc_info.value)
+
+
+def test_integrate_package_unsafe_traversal_path(monkeypatch):
+    package_spec = Spec(
+        request="calculator",
+        description="A CLI calculator",
+        acceptance_criteria=["adds", "subtracts"],
+        assumptions=[],
+        output_type="python_package",
+    )
+    import json
+
+    import pytest
+
+    from builder_agent import integrate as integrate_mod
+
+    monkeypatch.setattr(
+        integrate_mod,
+        "ask",
+        lambda *args, **kwargs: json.dumps({"../traversal.py": "content"})
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        integrate(package_spec, {}, PLAN)
+    assert "Unsafe path" in str(exc_info.value)
+

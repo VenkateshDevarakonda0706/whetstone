@@ -217,3 +217,70 @@ def test_module_entrypoint():
             "__main__.py",
         )
     )
+
+
+def _make_package_result():
+    r = _make_success_result()
+    r["spec"].output_type = "python_package"
+    r["artifact"] = {
+        "calculator/__init__.py": "from .core import add\n",
+        "calculator/core.py": "def add(a, b): return a + b\n"
+    }
+    return r
+
+
+@patch("builder_agent.cli.orchestrate", return_value=_make_package_result())
+def test_build_output_dir_flag(mock_orch):
+    with tempfile.TemporaryDirectory() as tmpdir:
+        code = main([
+            "build", "test", "--non-interactive",
+            "--no-memory", "--output-dir", tmpdir,
+        ])
+        assert code == EXIT_SUCCESS
+        assert os.path.exists(os.path.join(tmpdir, "calculator", "__init__.py"))
+        assert os.path.exists(os.path.join(tmpdir, "calculator", "core.py"))
+
+        with open(os.path.join(tmpdir, "calculator", "core.py")) as f:
+            content = f.read()
+        assert "def add" in content
+
+
+@patch("builder_agent.cli.orchestrate")
+def test_build_output_dir_path_traversal_rejection(mock_orch):
+    r = _make_package_result()
+    r["artifact"] = {"../unsafe.py": "bad"}
+    mock_orch.return_value = r
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        import pytest
+        with pytest.raises(ValueError) as exc_info:
+            main([
+                "build", "test", "--non-interactive",
+                "--no-memory", "--output-dir", tmpdir,
+            ])
+        assert "Unsafe path traversal" in str(exc_info.value)
+
+
+@patch("builder_agent.cli.orchestrate", return_value=_make_package_result())
+def test_build_output_dir_omitted_default_fallback(mock_orch, monkeypatch):
+    # Use temporary directory for default output folder path to prevent pollution
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Override output_package default or patch writing folder
+        dest_pkg = os.path.join(tmpdir, "default_out")
+
+        # Intercept _print_result behavior or temporarily mock the folder resolution
+        from builder_agent import cli as cli_mod
+        orig_print_result = cli_mod._print_result
+
+        def mock_print_result(result, output_path="", output_dir=""):
+            # Redirect to dest_pkg
+            return orig_print_result(
+                result, output_path=output_path, output_dir=dest_pkg
+            )
+
+        monkeypatch.setattr(cli_mod, "_print_result", mock_print_result)
+
+        code = main(["build", "test", "--non-interactive", "--no-memory"])
+        assert code == EXIT_SUCCESS
+        assert os.path.exists(os.path.join(dest_pkg, "calculator", "core.py"))
+

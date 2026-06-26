@@ -1,9 +1,47 @@
 from __future__ import annotations
 
 import ast
+import json
+import os
 import re
 
+from builder_agent import config
+from builder_agent.llm import ask, extract_json
 from builder_agent.schemas import Plan, Spec
+
+_INTEGRATE_PACKAGE_SYSTEM = (
+    "You are an expert software architect. You are given a specifications list "
+    "and a collection of Python code blocks generated for subtasks. "
+    "Structure these code blocks into a cohesive, valid, multi-file Python package. "
+    "Return ONLY a JSON object mapping file paths (relative to the package root) "
+    "to their file contents. Do not output markdown code fences, "
+    "do not output explanations."
+)
+
+_INTEGRATE_PACKAGE_PROMPT = (
+    "Spec Description: {spec_desc}\n\n"
+    "Subtask code outputs:\n{code_outputs}\n\n"
+    "Generate the Python package structure. Ensure all files use valid "
+    "absolute/relative imports to refer to other files in the package. "
+    "Create a proper __init__.py that exposes the main public interface. "
+    "Return a JSON object: {{\"path\": \"content\"}}."
+)
+
+
+def _is_safe_relative_path(path: str) -> bool:
+    """Validate that the path is relative and does not permit directory traversal."""
+    # Reject absolute paths (starting with / or matching drive letter on Windows)
+    if os.path.isabs(path) or path.startswith(("/", "\\")):
+        return False
+    # Reject drive letter (e.g. C:) or special characters
+    if ":" in path:
+        return False
+    # Reject path traversal (e.g. contain ..)
+    parts = path.replace("\\", "/").split("/")
+    for part in parts:
+        if part == "..":
+            return False
+    return True
 
 
 def _extract_imports(code: str) -> tuple[list[str], str]:
@@ -38,7 +76,43 @@ def _extract_public_names(code: str) -> list[str]:
     return names
 
 
-def integrate(spec: Spec, outputs: dict[str, str], plan: Plan) -> str:
+def integrate(spec: Spec, outputs: dict[str, str], plan: Plan) -> str | dict[str, str]:
+    """Integrate outputs into a single module or a directory file tree (package)."""
+    if spec.output_type == "python_package":
+        code_outputs = ""
+        for subtask in plan.subtasks:
+            code = outputs.get(subtask.id, "")
+            if code:
+                code_outputs += (
+                    f"### Subtask {subtask.id} ({subtask.description}):\n"
+                    f"{code}\n\n"
+                )
+
+        prompt = _INTEGRATE_PACKAGE_PROMPT.format(
+            spec_desc=spec.description,
+            code_outputs=code_outputs.strip(),
+        )
+        raw = ask(
+            prompt,
+            model=config.PLANNER_MODEL,
+            system=_INTEGRATE_PACKAGE_SYSTEM,
+        )
+        package_data = json.loads(extract_json(raw))
+
+        if not isinstance(package_data, dict):
+            raise ValueError(
+                f"Integrator LLM did not return a dictionary mapping: {raw}"
+            )
+
+        for path in package_data.keys():
+            if not _is_safe_relative_path(path):
+                raise ValueError(
+                    f"Unsafe path traversal/absolute path detected: {path}"
+                )
+
+        return {str(k): str(v) for k, v in package_data.items()}
+
+    # Existing single module logic
     all_imports: list[str] = []
     all_bodies: list[str] = []
 
