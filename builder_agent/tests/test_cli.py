@@ -284,3 +284,16 @@ def test_build_output_dir_omitted_default_fallback(mock_orch, monkeypatch):
         assert code == EXIT_SUCCESS
         assert os.path.exists(os.path.join(dest_pkg, "calculator", "core.py"))
 
+def test_progress_renderer_handles_chunk(capsys):
+    from builder_agent.cli import ProgressRenderer, Spinner
+    spinner = Spinner()
+    renderer = ProgressRenderer(spinner)
+
+    renderer("generating", {"iteration": 1, "subtask": "t1"})
+    renderer("chunk", {"chunk": "def add(a, b):\n"})
+    renderer("chunk", {"chunk": "    return a + b"})
+    renderer("critiquing", {})
+
+    captured = capsys.readouterr().out
+    assert "Generating iter 1:" in captured
+    assert "    def add(a, b):\n        return a + b" in captured
