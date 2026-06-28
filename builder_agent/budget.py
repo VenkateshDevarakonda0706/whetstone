@@ -1,10 +1,20 @@
+"""Token budget tracking and accounting module."""
+
 from __future__ import annotations
 
 import threading
 
 
 class TokenBudget:
+    """Accumulates and enforces limits on token consumption during builds."""
+
     def __init__(self, limit: int = 0, max_cost: float = 0.0):
+        """Initialize TokenBudget with a specific token limit and max cost.
+
+        Args:
+            limit: The maximum total tokens allowed before budget is exceeded.
+            max_cost: The maximum monetary cost allowed before budget is exceeded.
+        """
         self._limit = limit
         self._max_cost = max_cost
         self._input_tokens = 0
@@ -23,6 +33,15 @@ class TokenBudget:
         cache_read_tokens: int = 0,
         cache_creation_tokens: int = 0,
     ) -> None:
+        """Record input and output tokens consumed, and optionally cost.
+
+        Args:
+            input_tokens: Number of input tokens to add.
+            output_tokens: Number of output tokens to add.
+            cost: Optional monetary cost of the tokens.
+            cache_read_tokens: Number of cached prompt tokens read.
+            cache_creation_tokens: Number of cached prompt tokens created/written.
+        """
         with self._lock:
             self._input_tokens += input_tokens
             self._output_tokens += output_tokens
@@ -36,16 +55,19 @@ class TokenBudget:
 
     @property
     def total(self) -> int:
+        """Return the sum of input and output tokens consumed."""
         with self._lock:
             return self._input_tokens + self._output_tokens
 
     @property
     def input_tokens(self) -> int:
+        """Return the total input tokens consumed."""
         with self._lock:
             return self._input_tokens
 
     @property
     def output_tokens(self) -> int:
+        """Return the total output tokens consumed."""
         with self._lock:
             return self._output_tokens
 
@@ -61,12 +83,18 @@ class TokenBudget:
 
     @property
     def cost(self) -> float | None:
+        """Return the total monetary cost consumed, or None if cost is unknown."""
         with self._lock:
             if self._cost_unknown:
                 return None
             return self._cost
 
     def exceeded(self) -> bool:
+        """Check if total tokens or cost consumed exceed the configured budget limit.
+
+        Returns:
+            True if token budget or max cost limit is exceeded, False otherwise.
+        """
         with self._lock:
             total_tokens = self._input_tokens + self._output_tokens
             if self._limit > 0 and total_tokens >= self._limit:
@@ -80,6 +108,11 @@ class TokenBudget:
             return False
 
     def exceeded_reason(self) -> str | None:
+        """Return the reason why the budget was exceeded ('token_budget' or 'max_cost').
+
+        Returns:
+            String representing the exceeded reason, or None if not exceeded.
+        """
         with self._lock:
             total_tokens = self._input_tokens + self._output_tokens
             if self._limit > 0 and total_tokens >= self._limit:
@@ -93,6 +126,11 @@ class TokenBudget:
             return None
 
     def usage(self) -> dict:
+        """Return a dictionary summarizing the budget usage and limits.
+
+        Returns:
+            A dictionary containing consumed tokens, cost, and limit details.
+        """
         with self._lock:
             return {
                 "input_tokens": self._input_tokens,

@@ -1,3 +1,5 @@
+"""Code generation and self-critique review worker routines."""
+
 from __future__ import annotations
 
 from typing import Callable
@@ -53,6 +55,19 @@ def generate(
     worker_model: ModelConfig | None = None,
     on_chunk: Callable[[str], None] | None = None,
 ) -> str:
+    """Generate source code for a specific plan subtask using worker models.
+
+    Args:
+        subtask: The subtask defining requirements and acceptance criteria.
+        spec: The global specification structure.
+        feedback: Reviewer/verifier issues from any previous failed runs.
+        memory_hints: Stored memory guides representing past build lessons.
+        worker_model: Specific model configuration profile override.
+        on_chunk: Callback callback stream to stream token chunks during query.
+
+    Returns:
+        The generated raw source code block.
+    """
     criteria = "\n".join(f"- {c}" for c in subtask.acceptance_criteria)
     feedback_block = ""
     if feedback:
@@ -103,6 +118,16 @@ def self_critique(
     worker_model: ModelConfig | None = None,
     output_type: str = "python",
 ) -> str:
+    """Analyze and refine generated code drafts before passing to the verifier.
+
+    Args:
+        code: Draft version of source code to analyze.
+        subtask: SubTask definition context representing goals.
+        worker_model: Specific model configuration profile override.
+
+    Returns:
+        The refined/improved version of the source code.
+    """
     criteria = "\n".join(f"- {c}" for c in subtask.acceptance_criteria)
     prompt = _CRITIQUE_PROMPT.format(criteria=criteria, code=code)
     model = worker_model or config.WORKER_MODEL
