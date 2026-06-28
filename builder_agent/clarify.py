@@ -11,7 +11,8 @@ _SYSTEM = (
     "with keys: description (str), acceptance_criteria (list[str]), "
     "assumptions (list[str]), output_type (str). "
     "acceptance_criteria must be objective, checkable statements. "
-    "output_type is one of: python_module, python_package, sql, pipeline."
+    "output_type is one of: python, python_module, python_package, "
+    "javascript, typescript, sql, pipeline."
 )
 
 _CLARIFY_PROMPT = (

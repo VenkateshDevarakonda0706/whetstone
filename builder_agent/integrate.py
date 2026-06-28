@@ -96,7 +96,7 @@ def integrate(spec: Spec, outputs: dict[str, str], plan: Plan) -> str | dict[str
 
         return {str(k): str(v) for k, v in package_data.items()}
 
-    # Existing single module logic
+    is_python = spec.output_type in ("python", "python_module")
     all_imports: list[str] = []
     all_bodies: list[str] = []
 
@@ -104,31 +104,36 @@ def integrate(spec: Spec, outputs: dict[str, str], plan: Plan) -> str | dict[str
         code = outputs.get(subtask.id, "")
         if not code:
             continue
-        imports, body = _extract_imports(code)
-        all_imports.extend(imports)
-        all_bodies.append(body.strip())
+        if is_python:
+            imports, body = _extract_imports(code)
+            all_imports.extend(imports)
+            all_bodies.append(body.strip())
+        else:
+            all_bodies.append(code.strip())
 
-    seen: set[str] = set()
-    deduped_imports: list[str] = []
-    for imp in all_imports:
-        normalized = re.sub(r"\s+", " ", imp).strip()
-        if normalized not in seen:
-            seen.add(normalized)
-            deduped_imports.append(imp)
+    if is_python:
+        seen: set[str] = set()
+        deduped_imports: list[str] = []
+        for imp in all_imports:
+            normalized = re.sub(r"\s+", " ", imp).strip()
+            if normalized not in seen:
+                seen.add(normalized)
+                deduped_imports.append(imp)
 
-    parts = []
-    if deduped_imports:
-        parts.append("\n".join(deduped_imports))
-        parts.append("")
-    parts.append("\n\n\n".join(all_bodies))
+        parts = []
+        if deduped_imports:
+            parts.append("\n".join(deduped_imports))
+            parts.append("")
+        parts.append("\n\n\n".join(all_bodies))
 
-    combined = "\n".join(parts)
+        combined = "\n".join(parts)
 
-    public_names = _extract_public_names(combined)
-    if public_names:
-        all_line = "__all__ = " + repr(public_names)
-        combined = combined + "\n\n\n" + all_line + "\n"
+        public_names = _extract_public_names(combined)
+        if public_names:
+            all_line = "__all__ = " + repr(public_names)
+            combined = combined + "\n\n\n" + all_line + "\n"
 
-    ast.parse(combined)
-
-    return combined
+        ast.parse(combined)
+        return combined
+    else:
+        return "\n\n\n".join(all_bodies)

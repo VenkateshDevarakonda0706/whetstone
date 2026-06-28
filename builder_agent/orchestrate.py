@@ -207,7 +207,9 @@ def orchestrate_subtask(
             "subtask": subtask.id, "iteration": i + 1,
         })
         logger.info("[%s] iter %d — self-critique", subtask.id, i + 1)
-        code = self_critique(code, subtask, worker_model=current_worker)
+        code = self_critique(
+            code, subtask, worker_model=current_worker, output_type=spec.output_type
+        )
 
         on_progress("verifying", {
             "subtask": subtask.id, "iteration": i + 1,

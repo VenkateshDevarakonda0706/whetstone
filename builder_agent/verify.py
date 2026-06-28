@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from typing import Protocol
 
@@ -9,16 +10,16 @@ from builder_agent.llm import ask, extract_json, strip_fences
 from builder_agent.sandbox import run_code
 from builder_agent.schemas import SubTask, Verdict
 
-_TEST_SYSTEM = (
-    "You are a test engineer. Given acceptance criteria and code, "
-    "write pytest-style tests that verify each criterion. "
-    "Output ONLY executable Python test code, no markdown fencing."
-)
-
 _TEST_PROMPT = (
     "Acceptance criteria:\n{criteria}\n\n"
     "Code under test:\n{code}\n\n"
     "Write tests that import nothing external — inline the code if needed."
+)
+
+_TEST_SYSTEM_TEMPLATE = (
+    "You are a test engineer. Given acceptance criteria and code, "
+    "write {test_framework_desc} that verify each criterion. "
+    "Output ONLY executable {language} test code, no markdown fencing."
 )
 
 _JUDGE_SYSTEM = (
@@ -34,11 +35,123 @@ _JUDGE_PROMPT = (
     "Score 0-10. List concrete issues."
 )
 
+_NODE_BUILTINS = {
+    "fs", "path", "os", "crypto", "child_process", "http", "https", "net",
+    "url", "util", "stream", "events", "assert", "querystring", "zlib",
+    "dns", "readline", "vm", "buffer", "process", "fs/promises"
+}
 
-def make_tests(subtask: SubTask, code: str) -> str:
+_JS_TEST_SHIM = """
+const assert = require('assert');
+const Module = require('module');
+const originalRequire = Module.prototype.require;
+Module.prototype.require = function(id) {
+    if (id.startsWith('.') || id.includes('code') ||
+        id.includes('main') || id === 'whetstone') {
+        return exports;
+    }
+    return originalRequire.apply(this, arguments);
+};
+
+global.describe = function(name, fn) {
+    console.log('Describe: ' + name);
+    fn();
+};
+
+global.test = global.it = function(name, fn) {
+    try {
+        fn();
+        console.log('  ✓ Pass: ' + name);
+    } catch (e) {
+        console.error('  ✗ Fail: ' + name);
+        console.error(e);
+        process.exitCode = 1;
+    }
+};
+
+global.expect = function(actual) {
+    return {
+        toBe(expected) { assert.strictEqual(actual, expected); },
+        toEqual(expected) { assert.deepStrictEqual(actual, expected); },
+        toBeNull() { assert.strictEqual(actual, null); },
+        toBeUndefined() { assert.strictEqual(actual, undefined); },
+        toBeTruthy() { assert.ok(actual); },
+        toBeFalsy() { assert.ok(!actual); },
+        toContain(item) {
+            if (Array.isArray(actual) || typeof actual === 'string') {
+                assert.ok(actual.includes(item));
+            } else {
+                throw new Error('expect().toContain() expects array or string');
+            }
+        }
+    };
+};
+"""
+
+_LANG_CONFIGS = {
+    "python": {
+        "language": "Python",
+        "test_framework_desc": "pytest-style tests",
+    },
+    "python_module": {
+        "language": "Python",
+        "test_framework_desc": "pytest-style tests",
+    },
+    "python_package": {
+        "language": "Python",
+        "test_framework_desc": "pytest-style tests",
+    },
+    "javascript": {
+        "language": "JavaScript",
+        "test_framework_desc": (
+            "Node-compatible tests (using global describe, "
+            "test/it, expect, or require('assert'))"
+        ),
+    },
+    "typescript": {
+        "language": "TypeScript",
+        "test_framework_desc": (
+            "TypeScript-compatible tests (using global describe, "
+            "test/it, expect, or require('assert'))"
+        ),
+    },
+}
+
+
+def _get_lang_config(output_type: str) -> dict:
+    return _LANG_CONFIGS.get(output_type, _LANG_CONFIGS["python"])
+
+
+def _extract_js_dependencies(code: str) -> list[str]:
+    deps = []
+    esm_patterns = [
+        r'''import\s+.*?\s+from\s+['"]([^'"]+)['"]''',
+        r'''import\s+['"]([^'"]+)['"]''',
+        r'''require\s*\(\s*['"]([^'"]+)['"]\s*\)''',
+        r'''import\s*\(\s*['"]([^'"]+)['"]\s*\)'''
+    ]
+    for pattern in esm_patterns:
+        for match in re.finditer(pattern, code):
+            dep = match.group(1)
+            if not dep.startswith((".", "/", "\\")) and dep not in _NODE_BUILTINS:
+                if dep.startswith("@"):
+                    parts = dep.split("/")
+                    if len(parts) >= 2:
+                        deps.append(f"{parts[0]}/{parts[1]}")
+                else:
+                    deps.append(dep.split("/")[0])
+    return sorted(list(set(deps)))
+
+
+def make_tests(subtask: SubTask, code: str, output_type: str = "python") -> str:
     criteria = "\n".join(f"- {c}" for c in subtask.acceptance_criteria)
     prompt = _TEST_PROMPT.format(criteria=criteria, code=code)
-    return ask(prompt, model=config.WORKER_MODEL, system=_TEST_SYSTEM)
+    cfg = _get_lang_config(output_type)
+    system = _TEST_SYSTEM_TEMPLATE.format(
+        test_framework_desc=cfg["test_framework_desc"],
+        language=cfg["language"]
+    )
+    return ask(prompt, model=config.WORKER_MODEL, system=system)
 
 
 class Verifier(Protocol):
@@ -48,10 +161,10 @@ class Verifier(Protocol):
 
 class GenericVerifier:
     def verify(self, subtask: SubTask, code: str) -> Verdict:
-        test_code = strip_fences(make_tests(subtask, code))
+        test_code = strip_fences(make_tests(subtask, code, output_type="python"))
         full_code = code + "\n\n" + test_code
         tests_passed, exec_output = run_code(
-            full_code, timeout=config.EXEC_TIMEOUT
+            full_code, timeout=config.EXEC_TIMEOUT, language="python"
         )
 
         if not tests_passed:
@@ -158,6 +271,82 @@ finally:
         criteria = "\n".join(f"- {c}" for c in subtask.acceptance_criteria)
         prompt = _JUDGE_PROMPT.format(
             criteria=criteria, code=code_str_for_prompt, exec_output=exec_output
+        )
+        raw = ask(prompt, model=config.JUDGE_MODEL, system=_JUDGE_SYSTEM)
+        data = json.loads(extract_json(raw))
+        score = int(data["score"])
+        issues = data.get("issues", [])
+
+        return Verdict(
+            passed=score >= config.SCORE_THRESHOLD,
+            score=score,
+            tests_passed=True,
+            issues=issues,
+            exec_output=exec_output,
+        )
+
+
+class JavaScriptVerifier:
+    def verify(self, subtask: SubTask, code: str) -> Verdict:
+        test_code = strip_fences(
+            make_tests(subtask, code, output_type="javascript")
+        )
+        full_code = _JS_TEST_SHIM + "\n\n" + code + "\n\n" + test_code
+
+        tests_passed, exec_output = run_code(
+            full_code, timeout=config.EXEC_TIMEOUT, language="javascript"
+        )
+
+        if not tests_passed:
+            return Verdict(
+                passed=False,
+                score=0,
+                tests_passed=False,
+                issues=[f"Tests failed: {exec_output}"],
+                exec_output=exec_output,
+            )
+
+        criteria = "\n".join(f"- {c}" for c in subtask.acceptance_criteria)
+        prompt = _JUDGE_PROMPT.format(
+            criteria=criteria, code=code, exec_output=exec_output
+        )
+        raw = ask(prompt, model=config.JUDGE_MODEL, system=_JUDGE_SYSTEM)
+        data = json.loads(extract_json(raw))
+        score = int(data["score"])
+        issues = data.get("issues", [])
+
+        return Verdict(
+            passed=score >= config.SCORE_THRESHOLD,
+            score=score,
+            tests_passed=True,
+            issues=issues,
+            exec_output=exec_output,
+        )
+
+
+class TypeScriptVerifier:
+    def verify(self, subtask: SubTask, code: str) -> Verdict:
+        test_code = strip_fences(
+            make_tests(subtask, code, output_type="typescript")
+        )
+        full_code = _JS_TEST_SHIM + "\n\n" + code + "\n\n" + test_code
+
+        tests_passed, exec_output = run_code(
+            full_code, timeout=config.EXEC_TIMEOUT, language="typescript"
+        )
+
+        if not tests_passed:
+            return Verdict(
+                passed=False,
+                score=0,
+                tests_passed=False,
+                issues=[f"Tests failed: {exec_output}"],
+                exec_output=exec_output,
+            )
+
+        criteria = "\n".join(f"- {c}" for c in subtask.acceptance_criteria)
+        prompt = _JUDGE_PROMPT.format(
+            criteria=criteria, code=code, exec_output=exec_output
         )
         raw = ask(prompt, model=config.JUDGE_MODEL, system=_JUDGE_SYSTEM)
         data = json.loads(extract_json(raw))
@@ -280,8 +469,11 @@ class SqlVerifier:
 
 _VERIFIERS: dict[str, Verifier] = {
     "sql": SqlVerifier(),
+    "python": GenericVerifier(),
     "python_module": GenericVerifier(),
     "python_package": PythonPackageVerifier(),
+    "javascript": JavaScriptVerifier(),
+    "typescript": TypeScriptVerifier(),
 }
 
 
