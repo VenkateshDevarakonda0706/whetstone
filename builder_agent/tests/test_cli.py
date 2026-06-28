@@ -393,7 +393,11 @@ def test_progress_renderer_handles_chunk(capsys):
 
 @patch("builder_agent.cli.input")
 @patch("builder_agent.cli.orchestrate")
-def test_repl_export_and_history(mock_orchestrate, mock_input, tmp_path, capsys):
+@patch("builder_agent.cli.detect_ambiguity")
+def test_repl_export_and_history(
+    mock_detect, mock_orchestrate, mock_input, tmp_path, capsys
+):
+    mock_detect.return_value = []
     mock_orchestrate.return_value = _make_success_result()
     mock_input.side_effect = [
         "/export",
