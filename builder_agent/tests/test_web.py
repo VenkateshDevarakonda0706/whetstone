@@ -74,11 +74,23 @@ def test_web_routes(temp_history_db):
 async def test_stream_sse_endpoint(temp_history_db):
     with patch("builder_agent.web.routes.BuildHistory", return_value=temp_history_db):
         build_id = temp_history_db.create_build("test sse", "python_module")
-        temp_history_db.add_attempt(build_id, "t1", 1, "code", 9, True, [])
-        temp_history_db.update_build_status(build_id, "passed", 9, "final_code")
 
         from builder_agent.web.routes import get_stream
         response = await get_stream(build_id)
+
+        # Broadcast a live attempt
+        from builder_agent.web.events import sse_manager
+        sse_manager.broadcast(build_id, "attempt", {
+            "subtask_id": "t1",
+            "iteration": 1,
+            "score": 9,
+            "passed": True,
+            "issues": [],
+            "code": "code"
+        })
+
+        # Update status in DB to break the loop
+        temp_history_db.update_build_status(build_id, "passed", 9, "final_code")
 
         chunks = []
         async for chunk in response.body_iterator:

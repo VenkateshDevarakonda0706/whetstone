@@ -119,33 +119,28 @@ async def get_stream(build_id: str):
     db = BuildHistory()
 
     async def event_generator():
-        last_attempt_count = 0
         last_status = None
         try:
             while True:
-                # 1. Fetch current status and attempts from shared database
+                # 1. Fetch current status from shared database
                 build = db.get_build(build_id)
                 if not build:
                     break
 
-                attempts = db.get_attempts(build_id)
-                if len(attempts) > last_attempt_count:
-                    for i in range(last_attempt_count, len(attempts)):
-                        attempt = attempts[i]
-                        yield f"event: attempt\ndata: {json.dumps(attempt)}\n\n"
-                    last_attempt_count = len(attempts)
+                # 2. Check for in-process queue updates
+                while not queue.empty():
+                    msg = queue.get_nowait()
+                    if msg["type"] == "status":
+                        continue
+                    yield f"event: {msg['type']}\ndata: {json.dumps(msg['data'])}\n\n"
 
+                # 3. Yield status updates and handle termination
                 if build["status"] != last_status:
                     yield f"event: status\ndata: {json.dumps(build)}\n\n"
                     last_status = build["status"]
 
                 if build["status"] in ("passed", "failed"):
                     break
-
-                # 2. Check for in-process queue updates
-                while not queue.empty():
-                    msg = queue.get_nowait()
-                    yield f"event: {msg['type']}\ndata: {json.dumps(msg['data'])}\n\n"
 
                 await asyncio.sleep(0.5)
         finally:
