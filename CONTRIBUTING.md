@@ -92,7 +92,7 @@ All LLM SDK queries must remain encapsulated inside `builder_agent/llm.py` to pr
 ---
 
 ### 2. Adding a Custom Embedder
-Embedders are pluggable components configured via `[memory]` settings. They are defined in [`builder_agent/embedders.py`](file:///c:/Users/Venkatesh/OneDrive/Desktop/Projects/OPEN/whetstone/builder_agent/embedders.py):
+Embedders are pluggable components configured via `[memory]` settings. They are defined in [`builder_agent/embedders.py`](builder_agent/embedders.py):
 
 1. **Implement the Embedder Protocol**:
    Your class must conform to the `Embedder` protocol:
@@ -115,7 +115,7 @@ Embedders are pluggable components configured via `[memory]` settings. They are 
 ## Testing Guidelines
 
 * **Unit Testing**: All code modifications and features must have corresponding unit tests in the `builder_agent/tests/` directory.
-* **Mocking API Calls**: The test suite must run offline. **Never make live API calls inside tests**. Mock all LLM and embedding completions using pytest mocks or the helper response mock utilities in [`tests/test_llm.py`](file:///c:/Users/Venkatesh/OneDrive/Desktop/Projects/OPEN/whetstone/builder_agent/tests/test_llm.py).
+* **Mocking API Calls**: The test suite must run offline. **Never make live API calls inside tests**. Mock all LLM and embedding completions using pytest mocks or the helper response mock utilities in [`tests/test_llm.py`](builder_agent/tests/test_llm.py).
 * **Running Tests**:
   ```bash
   pytest
