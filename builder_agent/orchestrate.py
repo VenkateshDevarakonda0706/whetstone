@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import threading
-from typing import Callable
+from typing import Any, Callable
 
 from builder_agent import checkpoint, config
 from builder_agent.budget import TokenBudget
@@ -132,6 +132,7 @@ def orchestrate_subtask(
     memory: Memory | None = None,
     budget: TokenBudget | None = None,
     on_progress: ProgressCallback = _noop_progress,
+    plugin_manager: Any = None,
 ) -> dict:
     best: Attempt | None = None
     feedback: str | None = None
@@ -199,10 +200,13 @@ def orchestrate_subtask(
             })
 
         code = generate(
-            subtask, spec, feedback=feedback,
+            subtask,
+            spec,
+            feedback=feedback,
             memory_hints=memory_hints,
             worker_model=current_worker,
             on_chunk=chunk_callback,
+            plugin_manager=plugin_manager,
         )
 
         on_progress("critiquing", {
@@ -213,11 +217,27 @@ def orchestrate_subtask(
             code, subtask, worker_model=current_worker, output_type=spec.output_type
         )
 
+        # Run subtask post-processors
+        if plugin_manager is not None:
+            import os
+
+            from builder_agent.plugin_system import PluginContext
+            context = PluginContext(
+                workspace_dir=os.getcwd(),
+                output_type=spec.output_type,
+            )
+            code = plugin_manager.run_subtask_post_processors(subtask, code, context)
+
         on_progress("verifying", {
             "subtask": subtask.id, "iteration": i + 1,
         })
         logger.info("[%s] iter %d — verifying", subtask.id, i + 1)
-        verdict = verify(subtask, code, output_type=spec.output_type)
+        verdict = verify(
+            subtask,
+            code,
+            output_type=spec.output_type,
+            plugin_manager=plugin_manager,
+        )
 
         on_progress("verdict", {
             "subtask": subtask.id,
@@ -291,6 +311,7 @@ async def _async_orchestrate(
     build_id: str,
     outputs: dict[str, str] | None = None,
     completed_ids: set[str] | None = None,
+    plugin_manager: Any = None,
 ) -> dict:
     outputs = dict(outputs or {})
     completed_ids = set(completed_ids or set())
@@ -383,6 +404,7 @@ async def _async_orchestrate(
                     memory=memory,
                     budget=budget,
                     on_progress=on_progress,
+                    plugin_manager=plugin_manager,
                 )
             )
             active_tasks[task] = st_id
@@ -463,6 +485,8 @@ def orchestrate(
     on_progress: ProgressCallback = _noop_progress,
     resume: bool = False,
 ) -> dict:
+    from builder_agent.plugin_system import PluginManager
+    plugin_manager = PluginManager()
     from builder_agent.llm import set_progress_callback
     set_progress_callback(on_progress)
     try:
@@ -520,6 +544,7 @@ def orchestrate(
                 build_id=bid,
                 outputs=outputs0,
                 completed_ids=completed_ids0,
+                plugin_manager=plugin_manager,
             )
         )
 
@@ -546,6 +571,19 @@ def orchestrate(
         logger.info("Integrating outputs...")
         artifact = integrate(spec, res["outputs"], the_plan)
 
+        # Run artifact post-processors
+        if plugin_manager is not None:
+            import os
+
+            from builder_agent.plugin_system import PluginContext
+            context = PluginContext(
+                workspace_dir=os.getcwd(),
+                output_type=spec.output_type,
+            )
+            artifact = plugin_manager.run_artifact_post_processors(
+                spec, artifact, context
+            )
+
         on_progress("final_verify", {})
         logger.info("Running final verification...")
 
@@ -554,7 +592,12 @@ def orchestrate(
             description="Final integration verification",
             acceptance_criteria=spec.acceptance_criteria,
         )
-        final_verdict = verify(final_subtask, artifact, output_type=spec.output_type)
+        final_verdict = verify(
+            final_subtask,
+            artifact,
+            output_type=spec.output_type,
+            plugin_manager=plugin_manager,
+        )
 
         if memory is not None:
             plan_desc = " -> ".join(s.id for s in the_plan.subtasks)
